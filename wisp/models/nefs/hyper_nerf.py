@@ -290,7 +290,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
             # but, it's just same as self.template_xyz_pos_embedder + self.template_amb_pos_embedder
             # Here, I just hard-coded SliceDecoder details (Aug30)
             self.decoder = OrgNGPDecoder(
-                input_dim=self.template_xyz_pos_embedder + self.template_amb_pos_embedder, 
+                input_dim=self.template_xyz_pos_embed_dim + self.template_amb_pos_embed_dim, 
                 direction_dim=self.view_embed_dim+DIM_APPEARANCE, 
                 activation=get_activation_class(self.activation_type), 
                 bias=True,
@@ -493,7 +493,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
         # Third, (Finally) apply template network
         # Embed coordinates into high-dimensional vectors with the grid.
         if self.template_org:
-            xyz_inputs = self.template_xyz_pos_embedder(deformed_coords.reshape(-1,3), step)
+            xyz_inputs = self.template_xyz_pos_embedder(deformed_coords.reshape(-1,3))      # original hypernerf doesn't use "scheduled" positional encoding
             amb_inputs = self.template_amb_pos_embedder(amb_slice.reshape(-1,DIM_HYPER), step)
             fdir = torch.cat([
                 xyz_inputs,

@@ -296,10 +296,11 @@ class NGPDecoder(nn.Module):
             else:
                 layers.append(self.layer(self.hidden_dim, self.hidden_dim, bias=self.bias))
         self.layers = nn.ModuleList(layers)
-        self.lout = self.layer(self.hidden_dim, self.hidden_dim+1, bias=self.bias)
+        self.sigma = self.layer(self.hidden_dim, 1, bias=self.bias)
 
         self.color = self.layer(self.hidden_dim + self.direction_dim, self.hidden_dim//2, bias=self.bias)
         self.color_out = self.layer(self.hidden_dim//2, 3, bias=self.bias)
+
 
     def forward(self, x, color_latent, return_h=False):
         """Run the MLP!
@@ -324,16 +325,16 @@ class NGPDecoder(nn.Module):
             else:
                 h = self.activation(l(h))
         
-        out = self.lout(h)
+        sigma = self.sigma(h)
 
-        sigma = out[:,0:1]
-        color_feature = out[:,1:]
         color_input = torch.cat([
-            color_feature,
+            h,
             color_latent
         ], dim=-1)
 
-        rgb = self.color(color_input)
+        color_h = self.color(color_input)
+        rgb = self.color_out(color_h)
+        
 
         # Kaolin framework requires Batch x 4 returns (rgba)
         # It returns the raw output & handling the scale at the output
@@ -360,11 +361,10 @@ class NGPDecoder(nn.Module):
         # initialize with default xavier uniform
         for i, w in enumerate(self.layers):
             torch.nn.init.xavier_uniform(w.weight)
-        
-        # initialize lout
-        torch.nn.init.uniform_(self.lout.weight, a=0, b=1e-5)
-        torch.nn.init.uniform_(self.color_out.weight, a=0, b=1e-5)
 
-        # initialize color mlp
+        # initialize color layer
         torch.nn.init.xavier_uniform_(self.color.weight)
-        torch.nn.init.uniform_(self.lout.weight, a=0, b=1e-5)
+        
+        # initialize sigma and color out
+        torch.nn.init.xavier_uniform_(self.sigma.weight)
+        torch.nn.init.xavier_uniform_(self.color_out.weight)
