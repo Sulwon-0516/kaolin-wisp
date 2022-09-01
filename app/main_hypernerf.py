@@ -6,17 +6,15 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION & AFFILIATES is strictly prohibited.
 
+import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 if __name__ == "__main__":
-    import os
-    #os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    #os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-
     import app_utils
 
     from wisp.trainers import *
-    from wisp.config_parser import parse_options, argparse_to_str, get_modules_from_config, \
+    from wisp.config_parser_for_hypernerf import parse_options, argparse_to_str, get_modules_from_config, \
         get_optimizer_from_config
     from wisp.framework import WispState
 

@@ -6,5 +6,15 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION & AFFILIATES is strictly prohibited.
 
-from .basic_decoders import *
-from .hypernerf_decoder import *
+parent: 'ngp_nerf_masked.yaml'
+
+global:
+    exp_name: 'test-ngp-nerf-masked-interactive'
+
+dataset:
+    bg_color: 'black'
+
+trainer:
+    save_every: -1
+    render_every: -1
+    valid_every: -1

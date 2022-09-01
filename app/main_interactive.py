@@ -15,6 +15,7 @@ if __name__ == "__main__":
     import app_utils
     import logging as log
     from wisp.trainers import *
+    from wisp.trainers.maskedmultiview_trainer import MaskedMultiviewTrainer
     from wisp.config_parser import parse_options, argparse_to_str, get_modules_from_config, \
         get_optimizer_from_config
     from wisp.framework import WispState
