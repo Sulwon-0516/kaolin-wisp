@@ -9,4 +9,5 @@
 from .base_tracer import BaseTracer
 from .packed_rf_tracer import PackedRFTracer
 from .packed_sdf_tracer import PackedSDFTracer
+from .hyper_tracer import HyperTracer
 from .sdf_tracer import SDFTracer

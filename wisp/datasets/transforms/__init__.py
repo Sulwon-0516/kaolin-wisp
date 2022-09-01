@@ -8,3 +8,4 @@
 
 
 from .ray_sampler import *
+from .ray_sampler_hyper import *

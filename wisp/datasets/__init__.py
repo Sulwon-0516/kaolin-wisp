@@ -8,4 +8,5 @@
 
 from .sdf_dataset import SDFDataset
 from .multiview_dataset import MultiviewDataset
+from .multiview_dataset_for_hyper import MultiviewDatasetHyper
 from .utils import default_collate

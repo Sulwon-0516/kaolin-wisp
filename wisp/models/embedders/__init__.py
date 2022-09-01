@@ -7,3 +7,4 @@
 # license agreement from NVIDIA CORPORATION & AFFILIATES is strictly prohibited.
 
 from .positional_embedder import *
+from .scheduled_positional_embedder import *

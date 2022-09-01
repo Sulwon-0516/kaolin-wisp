@@ -9,4 +9,5 @@
 from .base_trainer import BaseTrainer
 from .multiview_trainer import MultiviewTrainer
 from .maskedmultiview_trainer import MaskedMultiviewTrainer
+from .hypernerf_trainer import HyperNerfTrainer
 from .sdf_trainer import SDFTrainer

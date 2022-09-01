@@ -8,6 +8,7 @@
 
 
 import os
+import time
 import logging as log
 from tqdm import tqdm
 import random
@@ -21,7 +22,7 @@ from wisp.ops.image.metrics import psnr, lpips, ssim
 from wisp.core import Rays
 
 
-class MultiviewTrainer(BaseTrainer):
+class HyperNerfTrainer(BaseTrainer):
 
     def pre_epoch(self, epoch):
         """Override pre_epoch to support pruning.
@@ -40,7 +41,7 @@ class MultiviewTrainer(BaseTrainer):
         self.log_dict['rgb_loss'] = 0.0
         self.log_dict['image_count'] = 0
 
-    def step(self, epoch, n_iter, data):
+    def step(self, epoch, n_iter, data, tot_iter):
         """Implement the optimization over image-space loss.
         """
         self.scene_state.optimization.iteration = n_iter
@@ -50,7 +51,7 @@ class MultiviewTrainer(BaseTrainer):
         # Map to device
         rays = data['rays'].to(self.device).squeeze(0)
         img_gts = data['imgs'].to(self.device).squeeze(0)
-        
+        idx = data['idx']                              # currently it only handle single image / iter
 
         timer.check("map to device")
 
@@ -71,7 +72,7 @@ class MultiviewTrainer(BaseTrainer):
             lod_idx = None
 
         with torch.cuda.amp.autocast():
-            rb = self.pipeline(rays=rays, lod_idx=lod_idx, channels=["rgb"])
+            rb = self.pipeline(rays=rays, lod_idx=lod_idx, channels=["rgb"], idx=idx, step=tot_iter)
             timer.check("inference")
 
             # RGB Loss
@@ -91,7 +92,27 @@ class MultiviewTrainer(BaseTrainer):
         self.scaler.update()
 
         timer.check("backward and step")
-        
+    
+    def iterate(self):
+
+        if self.scene_state.optimization.running:
+            iter_start_time = time.time()
+            try:
+                if self.train_data_loader_iter is None:
+                    self.begin_epoch()
+                data = self.next_batch()
+                self.iteration += 1
+                self.tot_iter += 1
+            except StopIteration:
+                print("iter/epoch: ",self.iteration)
+                self.end_epoch()
+                self.begin_epoch()
+                data = self.next_batch()
+            self.step(self.epoch, self.iteration, data, self.tot_iter)
+            iter_end_time = time.time()
+            self.scene_state.optimization.elapsed_time += iter_end_time - iter_start_time
+
+
     def log_tb(self, epoch):
         log_text = 'EPOCH {}/{}'.format(epoch, self.num_epochs)
         self.log_dict['total_loss'] /= self.log_dict['total_iter_count']

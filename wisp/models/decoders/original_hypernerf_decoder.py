@@ -19,7 +19,7 @@ TRANS_FCL_WIDTH = 128
 
 
 
-class SE3Decoder(nn.Module):
+class OrgSE3Decoder(nn.Module):
     """SE3 Decoder with specific initialization
     """
     def __init__(self, 
@@ -28,9 +28,9 @@ class SE3Decoder(nn.Module):
         output_dim = 6,
         bias = True,
         layer = nn.Linear,
-        num_layers = 2, 
+        num_layers = 6, 
         hidden_dim = 128, 
-        skip       = []
+        skip       = [5]
     ):
         """Initialize the BasicDecoder.
 
@@ -47,6 +47,8 @@ class SE3Decoder(nn.Module):
         Returns:
             (void): Initializes the class.
         """
+
+        # Currently, it only decodes 
         super().__init__()
         
         self.input_dim = input_dim
@@ -63,9 +65,12 @@ class SE3Decoder(nn.Module):
         self.make()
         self.initialize()
 
+
+
     def make(self):
         """Builds the actual MLP.
         """
+        # I algined the concatenation of input in same direction
         layers = []
         for i in range(self.num_layers):
             if i == 0: 
@@ -97,8 +102,8 @@ class SE3Decoder(nn.Module):
             if i == 0:
                 h = self.activation(l(x))
             elif i in self.skip:
+                h = torch.cat([x, h], dim=-1)           #### Original code has issues here
                 h = self.activation(l(h))
-                h = torch.cat([x, h], dim=-1)
             else:
                 h = self.activation(l(h))
         
@@ -133,8 +138,7 @@ class SE3Decoder(nn.Module):
 
 
 
-
-class SliceDecoder(nn.Module):
+class OrgSliceDecoder(nn.Module):
     """Super basic but super useful MLP class.
     """
     def __init__(self, 
@@ -143,9 +147,9 @@ class SliceDecoder(nn.Module):
         activation,
         bias,
         layer = nn.Linear,
-        num_layers = 2, 
+        num_layers = 7, 
         hidden_dim = 64, 
-        skip       = []
+        skip       = [5]
     ):
         """Initialize the BasicDecoder.
 
@@ -210,8 +214,8 @@ class SliceDecoder(nn.Module):
             if i == 0:
                 h = self.activation(l(x))
             elif i in self.skip:
-                h = self.activation(l(h))
                 h = torch.cat([x, h], dim=-1)
+                h = self.activation(l(h))
             else:
                 h = self.activation(l(h))
         
@@ -241,18 +245,18 @@ class SliceDecoder(nn.Module):
 
 
 
-class NGPDecoder(nn.Module):
+class OrgNGPDecoder(nn.Module):
     """The NGP decoder is little different from original kaolin-wisp, so here I reimplemente it.
     """
     def __init__(self, 
         input_dim,
         direction_dim, 
         activation,
-        bias,
+        bias = True,
         layer = nn.Linear,
-        num_layers = 1, 
-        hidden_dim = 128, 
-        skip       = []
+        num_layers = 8, 
+        hidden_dim = 256, 
+        skip       = [5]
     ):
         """Initialize the BasicDecoder.
 
@@ -297,7 +301,7 @@ class NGPDecoder(nn.Module):
             else:
                 layers.append(self.layer(self.hidden_dim, self.hidden_dim, bias=self.bias))
         self.layers = nn.ModuleList(layers)
-        self.lout = self.layer(self.hidden_dim, self.hidden_dim+1, bias=self.bias)
+        self.lout = self.layer(self.hidden_dim, 1, bias=self.bias)
 
         self.color = self.layer(self.hidden_dim + self.direction_dim, self.hidden_dim//2, bias=self.bias)
         self.color_out = self.layer(self.hidden_dim//2, 3, bias=self.bias)
@@ -319,9 +323,9 @@ class NGPDecoder(nn.Module):
         for i, l in enumerate(self.layers):
             if i == 0:
                 h = self.activation(l(x))
-            elif i in self.skip:
-                h = self.activation(l(h))
+            elif i in self.skip:    
                 h = torch.cat([x, h], dim=-1)
+                h = self.activation(l(h))
             else:
                 h = self.activation(l(h))
         
@@ -348,7 +352,7 @@ class NGPDecoder(nn.Module):
         else:
             return out
 
-    def initialize(self):
+    def initialize(self, get_weight):
         """Initializes the MLP layers with some initialization functions.
 
         Args:
@@ -369,4 +373,3 @@ class NGPDecoder(nn.Module):
         # initialize color mlp
         torch.nn.init.xavier_uniform_(self.color.weight)
         torch.nn.init.uniform_(self.lout.weight, a=0, b=1e-5)
-

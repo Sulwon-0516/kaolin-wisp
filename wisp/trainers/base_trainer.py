@@ -151,6 +151,8 @@ class BaseTrainer(ABC):
         self.save_every = save_every
         self.timer.check('set_logger')
 
+        self.tot_iter = 0#########################################################
+
     def init_dataloader(self):
         self.train_data_loader = DataLoader(self.dataset,
                                             batch_size=self.batch_size,
@@ -358,7 +360,7 @@ class BaseTrainer(ABC):
         self.log_tb(epoch)
 
         # Render visualizations to tensorboard
-        if self.render_every > -1 and epoch % self.render_every == 0:
+        if self.render_every > -1 and epoch % self.render_every == 0 and epoch != 0:
             self.render_tb(epoch)
         
         # Save model
@@ -421,6 +423,8 @@ class BaseTrainer(ABC):
                     self.writer.add_image(f'RGB/{d}', out['rgb'].T, epoch)
                 if out.get('alpha') is not None:
                     self.writer.add_image(f'Alpha/{d}', out['alpha'].T, epoch)
+        
+        self.novel_gif_render(epoch, 120, True)
                 
     def save_model(self, epoch):
         """
@@ -478,7 +482,6 @@ class BaseTrainer(ABC):
         self.scene_state.optimization.iteration = iteration
 
 
-
     def novel_gif_render(self, epoch, N=120, add_z_elev=False):
         '''
         I implemented this code, as the camera focusing on "center" of image
@@ -486,27 +489,28 @@ class BaseTrainer(ABC):
         '''
         # First extract camera extrinsics
         cameras = list(self.dataset.data['cameras'].values())
-        Ts = torch.cat([camera.extrinsics.t for camera in cameras], dim=0)
 
-        means = Ts.mean(dim=0)
-        stds = Ts.std(dim=0)
+        Ts = torch.cat([-(camera.extrinsics.R.squeeze().T@camera.extrinsics.t.squeeze()).unsqueeze(0) for camera in cameras], dim=0)
+
+        means = Ts.mean(dim=0, keepdim=True)
+        stds = Ts.std(dim=0, keepdim=True)
 
         theta = torch.arange(N)/N*2*torch.pi
         theta = theta.unsqueeze(0)
         if add_z_elev:
             elev = torch.arange(N//2)/(N//2)
             dec = torch.flip(torch.arange(N-N//2)/(N-N//2), dims=[0])
-            z_elev = torch.cat([elev, dec], dim=0).unsqueeze(0)
+            z_elev = torch.cat([elev, dec], dim=0).unsqueeze(0)*0.3
         else:
-            z_elev = torch.ones(1, N)*0.5
+            z_elev = torch.ones(1, N)*0.3
 
         ratio = torch.cat([
-            theta.cos(),
+            z_elev,
+            theta.cos(),            
             theta.sin(),
-            z_elev
         ], dim=0)
 
-        new_origins = ratio * stds + means
+        new_origins = ratio * stds.T + means.T
         new_origins = new_origins.to(torch.float).T
 
         # make directory
@@ -576,6 +580,8 @@ class BaseTrainer(ABC):
                 if out.get('rgb') is not None:
                     spath = os.path.join(img_dir, 'rgb')
                     os.makedirs(spath, exist_ok=True)
+
+                    out['rgb'][...,[2,0]] = out['rgb'][...,[0,2]]
                     cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['rgb'])
                     if ind == 0:
                         fnames['rgb'] = [os.path.join(spath, str(ind)+'.png')]
@@ -600,11 +606,7 @@ class BaseTrainer(ABC):
             with imageio.get_writer(outname, mode='I', **kwargs) as writer:
                 for filename in tqdm(fnames[key]):
                     image = imageio.imread(filename)
+
                     writer.append_data(image)
-        
-                
 
 
-
-       
-        

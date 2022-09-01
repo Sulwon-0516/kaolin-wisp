@@ -20,11 +20,11 @@ from wisp.utils import PsDebugger, PerfTimer
 from wisp.ops.geometric import sample_unif_sphere
 
 from wisp.models.nefs import BaseNeuralField
-from wisp.models.embedders import get_positional_embedder
+from wisp.models.embedders import *
 from wisp.accelstructs import OctreeAS
 from wisp.models.layers import get_layer_class
 from wisp.models.activations import get_activation_class
-from wisp.models.decoders import BasicDecoder, SE3Decoder, SurfDecoder
+from wisp.models.decoders import BasicDecoder, SE3Decoder, SliceDecoder, NGPDecoder
 from wisp.models.grids import *
 
 
@@ -44,8 +44,18 @@ SE3_EXP_DIM = 6
 # Surface Modify Net
 DEPTH_SURF = 2
 WIDTH_SURF = 64
+DIM_HYPER = 2    # dimension of ambient dim
 
 
+# start with nerfies
+IGNORE_SURF_STEP = 1000 ################ should be discarded!!!!!!! (08/29)
+
+# original hypernerf positional encoding relevant settings
+DEFORM_DIM = warp_max_deg
+SLICE_DIM = hyper_slice_max_deg
+
+TEMPLATE_XYZ_DIM = 8
+TEMPLATE_AMB_DIM = hyper_point_max_deg
 
 
 
@@ -80,12 +90,22 @@ class HyperNeuralRadianceField(BaseNeuralField):
         num_layers       : int   = 1,
         position_input   : bool  = False,
 
+        # decoder_type
+        deform_org       : bool  = True,
+        slice_org        : bool  = True,
+        template_org     : bool  = False,
+        
+        # High dimensional hash grid option
+        high_dim_grid    : bool  = False,
+
         # num_images for feasture
         num_images       : int   = 0,
         **kwargs
     ):
     # I just copied and little modified the __init__ functions.
-        super().__init__()
+
+        nn.Module.__init__(self)
+
 
         self.grid_type = grid_type
         self.interpolation_type = interpolation_type
@@ -107,7 +127,17 @@ class HyperNeuralRadianceField(BaseNeuralField):
         self.pos_multires = pos_multires
         self.view_multires = view_multires
         self.num_layers = num_layers
-        self.position_input = position_input
+
+        self.position_input = False             ##################################################### position_input
+
+        
+        # Huge options.
+        # These are switches, turning ON & OFF the settings of decoder and higher-dimensions
+        self.deform_org = deform_org
+        self.slice_org = slice_org
+        self.template_org = template_org
+        self.high_dim_grid = high_dim_grid
+
 
         self.kwargs = kwargs
 
@@ -122,20 +152,23 @@ class HyperNeuralRadianceField(BaseNeuralField):
         self.register_forward_functions()
         self.supported_channels = set([channel for channels in self._forward_functions.values() for channel in channels])
 
+        self.use_seperate_grid = USE_SEPARATE_GRID
+
+
         if num_images == 0:
             print("default # of input images")
             assert(0)
         else:
-            self.num_imagse = num_images
+            self.num_images = num_images
     
 
-        # set it as parameters
+        # set it as embeddings
         self.appearance_param = nn.Embedding(
-            num_embeddings=self.num_imagse,
+            num_embeddings=self.num_images,
             embedding_dim=DIM_APPEARANCE
         )
-        self.latent_param = nn.Parameter(
-            num_embeddings=self.num_imagse,
+        self.latent_param = nn.Embedding(
+            num_embeddings=self.num_images,
             embedding_dim=DIM_LATENT
         )
 
@@ -147,13 +180,38 @@ class HyperNeuralRadianceField(BaseNeuralField):
     def init_embedder(self):
         """Creates positional embedding functions for the position and view direction.
         """
-        self.pos_embedder, self.pos_embed_dim = get_positional_embedder(self.pos_multires, 
-                                                                       self.embedder_type == "positional")
-        self.view_embedder, self.view_embed_dim = get_positional_embedder(self.view_multires, 
-                                                                         self.embedder_type == "positional")
-        log.info(f"Position Embed Dim: {self.pos_embed_dim}")
+        if self.deform_org:
+            # deformnet, original version positional encoding
+            self.deform_pos_embedder, self.deform_pos_embed_dim = get_scheduled_positional_embedder(DEFORM_DIM)
+            log.info(f"DeformNet Position Embed Dim: {self.deform_pos_embed_dim}")
+
+        if self.slice_org:
+            # slicenet, original version positional encoding
+            self.slice_pos_embedder, self.slice_pose_embed_dim = get_scheduled_positional_embedder(SLICE_DIM)
+            log.info(f"SliceNet Position Embed Dim: {self.slice_pose_embed_dim}")
+
+        if self.template_org:
+            # template network. orignal version positional encoding
+            self.template_xyz_pos_embedder, self.template_xyz_pos_embed_dim = get_positional_embedder(TEMPLATE_XYZ_DIM, True)
+            self.template_amb_pos_embedder, self.template_amb_pos_embed_dim = get_scheduled_positional_embedder(TEMPLATE_AMB_DIM, input_dim=DIM_HYPER)
+            log.info(f"TemplateNet XYZ Position Embed Dim: {self.template_xyz_pos_embed_dim}")
+            log.info(f"TemplateNet Ambient Position Embed Dim: {self.template_amb_pos_embed_dim}")
+
+        elif not self.high_dim_grid:
+            # in this case, only xyz pass hash grids.
+            # in other word, ambient dimension should be added to network separately.
+            self.template_amb_pos_embedder, self.template_amb_pos_embed_dim = get_scheduled_positional_embedder(TEMPLATE_AMB_DIM, input_dim=DIM_HYPER)
+            log.info(f"TemplateNet Ambient Position Embed Dim: {self.template_amb_pos_embed_dim}")
+
+
+        # we should always handle view-encoding
+        self.view_embedder, self.view_embed_dim = get_positional_embedder(self.view_multires, True)
         log.info(f"View Embed Dim: {self.view_embed_dim}")
 
+        # TODO! 
+        # We need to implement spherical harmonics encoding here! (08/29)#################################################################################
+
+        
     def init_decoder(self):
         """Initializes the decoder object. 
         """
@@ -162,50 +220,111 @@ class HyperNeuralRadianceField(BaseNeuralField):
         else:
             self.effective_feature_dim = self.grid.feature_dim
 
-        self.input_dim = self.effective_feature_dim + DIM_LATENT
+        '''define deform decoder'''
+        if self.deform_org:
+            # case using original deform net.
+            from wisp.models.decoders import OrgSE3Decoder
+            # we need to calculate input dimension
+            # it 3*2*(DEFORM_DIM) + DIM_LATENT
+            # it's same as self.deform_pos_embed_dim + DIM_LATENT
+            # Here, I just hard-coded SE3Decoder details (Aug30)
+            
+            self.deform_decoder = OrgSE3Decoder(
+                input_dim=self.deform_pos_embed_dim+DIM_LATENT, 
+                output_dim=SE3_EXP_DIM, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                #num_layers=self.num_layers,
+                #hidden_dim=WIDTH_DEFORM, 
+                #skip=[],
+                )
+        else:
+            # deformation encoder (input encoder)
+            self.deform_decoder = SE3Decoder(
+                input_dim=self.effective_feature_dim+DIM_LATENT, 
+                output_dim=SE3_EXP_DIM, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                num_layers=self.num_layers,
+                hidden_dim=WIDTH_DEFORM, 
+                skip=[])
 
-        if self.position_input:
-            self.input_dim += self.pos_embed_dim
+        '''define slice net'''
+        if self.slice_org:
+            # case using original slice net
+            from wisp.models.decoders import OrgSliceDecoder
+            # we need to calculate input dimension
+            # it 3*2*(SLICE_DIM) + DIM_LATENT
+            # but, it's just same as self.slice_pose_embed_dim + DIM_LATENT
+            # Here, I just hard-coded SliceDecoder details (Aug30)
+            self.surf_decoder = OrgSliceDecoder(
+                input_dim=self.slice_pose_embed_dim+DIM_LATENT, 
+                output_dim=DIM_HYPER, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                #num_layers=self.num_layers,
+                #hidden_dim=WIDTH_SURF, 
+                #skip=[],
+                )
+        else:
+            # Slice encoder (surface plane encoder)
+            self.surf_decoder = SliceDecoder(
+                input_dim=self.effective_feature_dim+DIM_LATENT, 
+                output_dim=DIM_HYPER, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                num_layers=self.num_layers,
+                hidden_dim=WIDTH_SURF, 
+                skip=[])
+        
+        '''define template'''
+        if self.template_org:
+            # case using original template slice net
+            from wisp.models.decoders import OrgNGPDecoder
+            # we need to calculate input dimension
+            # it 3*2*(TEMPLATE_XYZ_DIM) + 2*TEMPLATE_AMB_DIM
+            # but, it's just same as self.template_xyz_pos_embedder + self.template_amb_pos_embedder
+            # Here, I just hard-coded SliceDecoder details (Aug30)
+            self.decoder = OrgNGPDecoder(
+                input_dim=self.template_xyz_pos_embedder + self.template_amb_pos_embedder, 
+                direction_dim=self.view_embed_dim+DIM_APPEARANCE, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                #num_layers=self.num_layers,
+                #hidden_dim=self.hidden_dim, 
+                #skip=[]
+                )
+        elif not self.high_dim_grid:
+            # not using high dimensional grids (the real defaults)
+            self.decoder = NGPDecoder(
+                input_dim=self.effective_feature_dim + self.template_amb_pos_embed_dim, 
+                direction_dim=self.view_embed_dim+DIM_APPEARANCE, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                num_layers=self.num_layers,
+                hidden_dim=self.hidden_dim, 
+                skip=[])
 
-        # original final decoder (template decoder)
-        self.decoder = BasicDecoder(
-            input_dim=self.input_dim, 
-            output_dim=1, 
-            activation=get_activation_class(self.activation_type), 
-            bias=True,
-            layer=get_layer_class(self.layer_type), 
-            num_layers=self.num_layers,
-            hidden_dim=self.hidden_dim, 
-            skip=[])
-
-        # additional color layer
-        if USE_DIFF_COLOR_DECODER:
-            self.rgb_decode = nn.Linear(
-                in_features=self.hidden_dim + self.view_embed_dim + DIM_APPEARANCE,
-                out_features=3
-            )
-
-        # deformation encoder (input encoder)
-        self.deform_decoder = SE3Decoder(
-            input_dim=self.effective_feature_dim+DIM_LATENT, 
-            output_dim=SE3_EXP_DIM, 
-            activation=get_activation_class(self.activation_type), 
-            bias=True,
-            layer=get_layer_class(self.layer_type), 
-            num_layers=self.num_layers,
-            hidden_dim=WIDTH_DEFORM, 
-            skip=[])
-
-        # deformation encoder (surface plane encoder)
-        self.surf_decoder = BasicDecoder(
-            input_dim=self.effective_feature_dim+DIM_LATENT, 
-            output_dim=DIM_LATENT, 
-            activation=get_activation_class(self.activation_type), 
-            bias=True,
-            layer=get_layer_class(self.layer_type), 
-            num_layers=self.num_layers,
-            hidden_dim=WIDTH_SURF, 
-            skip=[])
+        else:
+            # using high dimensional girds (template decoder)
+            # in this case we need to re-calculate the effective_feature_dim
+            # 어라.... 생각해보니까 hash function만 바꾸면, 사실 feature dim은 같자나?
+            # So, we only use self.effective_feature_dim here.
+            self.decoder = NGPDecoder(
+                input_dim=self.effective_feature_dim, 
+                direction_dim=self.view_embed_dim+DIM_APPEARANCE, 
+                activation=get_activation_class(self.activation_type), 
+                bias=True,
+                layer=get_layer_class(self.layer_type), 
+                num_layers=self.num_layers,
+                hidden_dim=self.hidden_dim, 
+                skip=[])
 
     def init_grid(self):
         """Initialize the grid object.
@@ -221,10 +340,14 @@ class HyperNeuralRadianceField(BaseNeuralField):
         else:
             raise NotImplementedError
 
-        self.grid = grid_class(self.feature_dim,
-                               base_lod=self.base_lod, num_lods=self.num_lods,
-                               interpolation_type=self.interpolation_type, multiscale_type=self.multiscale_type,
-                               **self.kwargs)
+        if not self.high_dim_grid:
+            self.grid = grid_class(self.feature_dim,
+                                base_lod=self.base_lod, num_lods=self.num_lods,
+                                interpolation_type=self.interpolation_type, multiscale_type=self.multiscale_type,
+                                **self.kwargs)
+        else:
+            # We need to implement 5D feauter grid here!
+            assert(0)
 
         self.deform_grid = grid_class(self.feature_dim,
                                base_lod=self.base_lod, num_lods=self.num_lods,
@@ -296,7 +419,8 @@ class HyperNeuralRadianceField(BaseNeuralField):
         """
         self._register_forward_function(self.rgba, ["density", "rgb"])
 
-    def rgba(self, coords, ray_d, step, img_idx, pidx=None, lod_idx=None):
+
+    def rgba(self, coords, ray_d, step, pidx=None, lod_idx=None, idx=torch.zeros(1, dtype=torch.int32)):
         """Compute color and density [particles / vol] for the provided coordinates.
 
         Args:
@@ -311,70 +435,101 @@ class HyperNeuralRadianceField(BaseNeuralField):
                 - RGB tensor of shape [batch, num_samples, 3] 
                 - Density tensor of shape [batch, num_samples, 1]
         """
+
+        img_idx = idx.to(self.latent_param.weight.device)
         timer = PerfTimer(activate=False, show_memory=True)
         if lod_idx is None:
             lod_idx = len(self.grid.active_lods) - 1
         batch, num_samples, _ = coords.shape
         timer.check("rf_rgba_preprocess")
         
-        if batch != 1:
-            print("currrent batch size : ", batch)
+        if num_samples != 1:
+            print("currrent # of sample : ", num_samples)
             print("only single batch can be handled now")
             assert(0)
 
-        ##########################
+        ##############################
         # First, apply deform plane
-        def_feats = self.deform_grid.interpolate(coords, lod_idx).reshape(-1, self.effective_feature_dim)
-        timer.check("deform_grid_interpolate")
+        if self.deform_org:
+            def_feats = self.deform_pos_embedder(coords.reshape(-1,3), step)
+        else:
+            def_feats = self.deform_grid.interpolate(coords, lod_idx).reshape(-1, self.effective_feature_dim)
+            timer.check("deform_grid_interpolate")
 
-        # As original HyperNeRF includes "residual connection", here I added residual inputs
         fdir = torch.cat([
             def_feats,
-            self.def_pos_embedder(coords.reshape(-1, 3), step),
-            self.latent_param[img_idx]
+#            self.def_pos_embedder(coords.reshape(-1, 3), step),            # (it can be treated as residual connection)
+            self.latent_param(img_idx).reshape(-1,DIM_LATENT).repeat(batch,1)
             ],dim = -1)
-        
+            
         se3_deforms = self.deform_decoder(fdir)
+        deformed_coords = func_se3deforms(se3_deforms, coords)          #### TODO (Aug 30) Checking se3 deforms can also handle, B, N, 3 shape coords
         timer.check("deform_decoder")
-        deformed_coords = se3_deforms(se3_deforms, coords)
         ###############################
 
-        ##########################
+        ###############################
         # Second, change surface plane
-        if USE_SEPARATE_GRID:
-            surf_feats = self.deform_grid.interpolate(coords, lod_idx).reshape(-1, self.effective_feature_dim)
+        if self.slice_org:
+            slice_feats = self.slice_pos_embedder(coords.reshape(-1,3), step)
+
         else:
-            surf_feats = def_feats
-        timer.check("surface_grid_interpolate")
+            if USE_SEPARATE_GRID:
+                slice_feats = self.deform_grid.interpolate(coords, lod_idx).reshape(-1, self.effective_feature_dim)
+            else:
+                slice_feats = def_feats
+            timer.check("surface_grid_interpolate")
 
         # As original HyperNeRF includes "residual connection", here I added residual inputs
         fdir = torch.cat([
-            surf_feats,
-            self.surf_pos_embedder(coords.reshape(-1, 3), step),
-            self.latent_param[img_idx]
+            slice_feats,
+#            self.surf_pos_embedder(coords.reshape(-1, 3), step),
+            self.latent_param(img_idx).reshape(-1,DIM_LATENT).repeat(batch,1)
             ],dim = -1)
         
-        deformed_inputs = self.surf_decoder(fdir)
+        amb_slice = self.surf_decoder(fdir)
         timer.check("surface_decoder")
         ###############################
 
-        ##########################
-        # Finally, apply template network
+        ###############################
+        # Third, (Finally) apply template network
         # Embed coordinates into high-dimensional vectors with the grid.
-        feats = self.grid.interpolate(deformed_coords, lod_idx).reshape(-1, self.effective_feature_dim)
-        timer.check("template_grid_interpolate")
+        if self.template_org:
+            xyz_inputs = self.template_xyz_pos_embedder(deformed_coords.reshape(-1,3), step)
+            amb_inputs = self.template_amb_pos_embedder(amb_slice.reshape(-1,DIM_HYPER), step)
+            fdir = torch.cat([
+                xyz_inputs,
+                amb_inputs
+            ], dim=-1)
+        else:
+            feats = self.grid.interpolate(deformed_coords, lod_idx).reshape(-1, self.effective_feature_dim)
+            timer.check("template_grid_interpolate")
 
-        # As original HyperNeRF includes "residual connection", here I added residual inputs
-        fdir = torch.cat([
-            feats,
-            self.nerf_pos_embedder(coords.reshape(-1, 3), step),
-            self.latent_param[img_idx],
-            self.appearance_param[img_idx]
-            ],dim = -1)
+            # making inputs on Decoder
+            if self.high_dim_grid:
+                fdir = feats
+            else:  
+                amb_inputs = self.template_amb_pos_embedder(amb_slice.reshape(-1,DIM_HYPER), step)
+                fdir = torch.cat([
+                    feats,
+        #            self.nerf_pos_embedder(coords.reshape(-1, 3), step),
+                    amb_inputs
+                ], dim = -1)
+
+        appearances = self.appearance_param(img_idx).reshape(-1, DIM_APPEARANCE).repeat(batch, 1)
+        directions = self.view_embedder(-ray_d)[:,None].repeat(1, num_samples, 1).view(-1, self.view_embed_dim)
+        ##### -> 여기 num_sample는 다 같은 ray가 들어온다 가정하나봄. (갱 진짜 무쓸모)
+        
+        color_latent = torch.cat([
+            appearances,
+            directions
+        ], dim=-1)
+
+
         timer.check("rf_rgba_embed_cat")
         
         # Decode high-dimensional vectors to RGBA.
-        rgba = self.decoder(fdir)
+        rgba = self.decoder(fdir, color_latent)
+
         timer.check("rf_rgba_decode")
 
         # Colors are values [0, 1] floats
@@ -393,10 +548,13 @@ class HyperNeuralRadianceField(BaseNeuralField):
 I just followed HyperNeRF-torch's implementation here.
 To be accurate, I need to do double-check & re-implmenet here.
 
+
+-> changed to handle batches (08/28)
+
 '''
-def se3deforms(se3_inputs, coords):
-    print("We need to check here (se3 deformation)")
+def func_se3deforms(se3_inputs, coords):
     w, v = se3_inputs[...,:3], se3_inputs[...,3:]
+    coords = coords.squeeze()
 
     theta = torch.norm(w, dim=-1)
     w = w / theta.unsqueeze(-1)
@@ -407,26 +565,29 @@ def se3deforms(se3_inputs, coords):
     warped_points = from_homogenous(
         torch.matmul(transform, to_homogenous(coords)))
 
-    return warped_points
+    return warped_points.unsqueeze(1)
+
 
 '''
 below codes are from unofficial HyperNeRF implementations
 https://github.com/songrise/HyperNeRF-torch/blob/7b9650fa3c0d5a28371bfeba7d3a37b2c913e573/hypernerf/rigid_body.py#L59
+I double-checked with original hyper NeRF (08/29)
 '''
 from torch import matmul
 
 def rp_to_se3(r, p):
     """Build a SE3 matrix from a rotation matrix and a translation vector.
     Args:
-        r: (3, 3) A rotation matrix
-        p: (3,) A translation vector
+        r: (B, 3, 3) A rotation matrix
+        p: (B, 3) A translation vector
     Returns:
-        T: (4, 4) A homogeneous transformation matrix
+        T: (B, 4, 4) A homogeneous transformation matrix
     """
-    p = p.view(3,1)
-    up =  torch.cat([r, p], dim=1)
-    lower = torch.tensor([[0, 0, 0, 1]], dtype=torch.float32).cuda()
-    return torch.cat([up, lower], dim=0)
+    p = p.view(-1,3,1)
+    up =  torch.cat([r, p], dim=-1)
+    lower = torch.tensor([[[0, 0, 0, 1]]], dtype=torch.float32).repeat(r.shape[0],1,1).cuda()
+    return torch.cat([up, lower], dim=1)
+
 
 
 def skew(w):
@@ -437,14 +598,19 @@ def skew(w):
     Returns:
         W: (3, 3) A skew matrix such that W @ v == w x v
     """
-    w = w.view(3)
-    return torch.tensor([[0, -w[2], w[1]],
-                        [w[2], 0.0, -w[0]],
-                        [-w[1], w[0], 0.0]], dtype=torch.float32).cuda()
+    res = torch.cat(
+        [
+            torch.cat([torch.zeros(w.shape[0],1, dtype=torch.float32).to(w.device), -w[:,2:3], w[:,1:2]], dim=-1).unsqueeze(1),
+            torch.cat([w[:,2:3], torch.zeros(w.shape[0],1, dtype=torch.float32).to(w.device), -w[:,0:1]], dim=-1).unsqueeze(1),
+            torch.cat([-w[:,1:2], w[:,0:1], torch.zeros(w.shape[0],1,dtype=torch.float32).to(w.device)], dim=-1).unsqueeze(1)
+        ], dim=1
+    )
+
+    return res.cuda()
 
 def exp_so3(w, theta):
     w = skew(w)
-    return torch.eye(3).cuda() + torch.sin(theta) * w + (1.0-torch.cos(theta)) * (w @ w)
+    return torch.eye(3).unsqueeze(0).repeat(w.shape[0],1,1).cuda() + torch.sin(theta) * w + (1.0-torch.cos(theta)) * (w @ w)
 
 def exp_se3(S, theta):
     """Exponential map from Lie algebra so3 to Lie group SO3.
@@ -457,24 +623,24 @@ def exp_se3(S, theta):
         motion of magnitude theta about S for one second.
     """
     w,v = S[...,:3], S[...,3:]
+    theta = theta.view(-1,1,1)
     v = v.squeeze(0)#todo check
     W = skew(w)
     R = exp_so3(w, theta).cuda()
-    a = (theta * torch.eye(3).cuda() + (1.0 - torch.cos(theta)) * W +
-              (theta - torch.sin(theta)) * matmul(W, W))
+    # = (theta * torch.eye(3).cuda() + (1.0 - torch.cos(theta)) * W + (theta - torch.sin(theta)) * matmul(W, W))
 
     # reshape v to match the shape
-    v = v.view(v.shape[1], v.shape[0])
-    p = matmul((theta * torch.eye(3).cuda() + (1.0 - torch.cos(theta)) * W +
-              (theta - torch.sin(theta)) * matmul(W, W)), v)
+    v = v.view(-1,3,1)
+    p = matmul((theta * torch.eye(3).unsqueeze(0).repeat(w.shape[0],1,1).cuda() + (1.0 - torch.cos(theta)) * W +
+              (theta - torch.sin(theta)) * matmul(W, W)), v).squeeze()
     return rp_to_se3(R, p)
 
 def to_homogenous(v):
-    ones = torch.ones_like(v[..., :1]).cuda()
+    ones = torch.ones_like(v[..., :1], dtype=torch.float32).cuda()
     #convert from (N,1,4) to (4,N)
     res = torch.cat([v, ones], dim=-1).squeeze(0)
-    return res.reshape(res.shape[1], res.shape[0])
+    return res.unsqueeze(-1)
 
 def from_homogenous(v):
-
+    v=v.squeeze()
     return v[..., :3] / v[..., -1:]
