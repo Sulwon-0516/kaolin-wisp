@@ -21,7 +21,7 @@ from wisp.ops.image.metrics import psnr, lpips, ssim
 from wisp.core import Rays
 
 
-class MultiviewTrainer(BaseTrainer):
+class MaskedMultiviewTrainer(BaseTrainer):
 
     def pre_epoch(self, epoch):
         """Override pre_epoch to support pruning.
@@ -50,7 +50,6 @@ class MultiviewTrainer(BaseTrainer):
         # Map to device
         rays = data['rays'].to(self.device).squeeze(0)
         img_gts = data['imgs'].to(self.device).squeeze(0)
-        
 
         timer.check("map to device")
 
@@ -76,7 +75,9 @@ class MultiviewTrainer(BaseTrainer):
 
             # RGB Loss
             #rgb_loss = F.mse_loss(rb.rgb, img_gts, reduction='none')
-            rgb_loss = torch.abs(rb.rgb[..., :3] - img_gts[..., :3])
+            diff = rb.rgb[..., :3] - img_gts[..., :3]
+            mask = (img_gts[..., :3].sum(dim=-1, keepdim=True) != 0)
+            rgb_loss = torch.abs(diff * mask)
             
             rgb_loss = rgb_loss.mean()
             loss += self.extra_args["rgb_loss"] * rgb_loss

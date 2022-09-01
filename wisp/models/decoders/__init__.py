@@ -7,3 +7,5 @@
 # license agreement from NVIDIA CORPORATION & AFFILIATES is strictly prohibited.
 
 from .basic_decoders import *
+from .hypernerf_decoder import *
+from .original_hypernerf_decoder import *

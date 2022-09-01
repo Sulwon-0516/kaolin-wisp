@@ -14,7 +14,7 @@ if __name__ == "__main__":
     import app_utils
 
     from wisp.trainers import *
-    from wisp.config_parser import parse_options, argparse_to_str, get_modules_from_config, \
+    from wisp.config_parser_for_hypernerf import parse_options, argparse_to_str, get_modules_from_config, \
         get_optimizer_from_config
     from wisp.framework import WispState
 

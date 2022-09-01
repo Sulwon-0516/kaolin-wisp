@@ -11,6 +11,9 @@ import logging as log
 from datetime import datetime
 from abc import ABC, abstractmethod
 import torch
+import cv2
+from tqdm import tqdm
+import imageio
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from wisp.offline_renderer import OfflineRenderer
@@ -147,6 +150,8 @@ class BaseTrainer(ABC):
         self.render_every = render_every
         self.save_every = save_every
         self.timer.check('set_logger')
+
+        self.tot_iter = 0#########################################################
 
     def init_dataloader(self):
         self.train_data_loader = DataLoader(self.dataset,
@@ -355,7 +360,7 @@ class BaseTrainer(ABC):
         self.log_tb(epoch)
 
         # Render visualizations to tensorboard
-        if self.render_every > -1 and epoch % self.render_every == 0:
+        if self.render_every > -1 and epoch % self.render_every == 0 and epoch != 0:
             self.render_tb(epoch)
         
         # Save model
@@ -418,6 +423,8 @@ class BaseTrainer(ABC):
                     self.writer.add_image(f'RGB/{d}', out['rgb'].T, epoch)
                 if out.get('alpha') is not None:
                     self.writer.add_image(f'Alpha/{d}', out['alpha'].T, epoch)
+        
+        self.novel_gif_render(epoch, 120, True)
                 
     def save_model(self, epoch):
         """
@@ -473,3 +480,127 @@ class BaseTrainer(ABC):
     @iteration.setter
     def iteration(self, iteration: int) -> int:
         self.scene_state.optimization.iteration = iteration
+
+    def novel_gif_render(self, epoch, N=120, add_z_elev=False):
+        '''
+        I implemented this code, as the camera focusing on "center" of image
+        
+        '''
+        # First extract camera extrinsics
+        cameras = list(self.dataset.data['cameras'].values())
+        Ts = torch.cat([-(camera.extrinsics.R.squeeze().T@camera.extrinsics.t.squeeze()).unsqueeze(0) for camera in cameras], dim=0)
+
+        means = Ts.mean(dim=0, keepdim=True)
+        stds = Ts.std(dim=0, keepdim=True)
+
+        theta = torch.arange(N)/N*2*torch.pi
+        theta = theta.unsqueeze(0)
+        if add_z_elev:
+            elev = torch.arange(N//2)/(N//2)
+            dec = torch.flip(torch.arange(N-N//2)/(N-N//2), dims=[0])
+            z_elev = torch.cat([elev, dec], dim=0).unsqueeze(0)*0.3
+        else:
+            z_elev = torch.ones(1, N)*0.3
+
+        ratio = torch.cat([
+            z_elev,
+            theta.cos(),            
+            theta.sin(),
+        ], dim=0)
+
+        new_origins = ratio * stds.T + means.T
+        new_origins = new_origins.to(torch.float).T
+
+        # make directory
+        res_dir = os.path.join(self.log_dir, "gifs")
+        img_dir = os.path.join(res_dir, str(epoch))
+        os.makedirs(res_dir, exist_ok=True)
+        os.makedirs(img_dir, exist_ok=True)
+
+
+        self.pipeline.eval()
+        d = self.extra_args["num_lods"] - 1
+        fnames = dict()
+        for ind, origin in tqdm(enumerate(new_origins)):
+            out = self.renderer.shade_images(self.pipeline,
+                                             f=origin,
+                                             t=self.extra_args["camera_lookat"],
+                                             fov=self.extra_args["camera_fov"],
+                                             lod_idx=d,
+                                             camera_clamp=self.extra_args["camera_clamp"])
+
+            # Premultiply the alphas since we're writing to PNG (technically they're already premultiplied)
+            if self.extra_args["bg_color"] == 'black' and out.rgb.shape[-1] > 3:
+                bg = torch.ones_like(out.rgb[..., :3])
+                out.rgb[..., :3] += bg * (1.0 - out.rgb[..., 3:4])
+            
+            out = out.image().byte().numpy_dict()
+            if out.get('depth') is not None:
+                spath = os.path.join(img_dir, 'depth')
+                os.makedirs(spath, exist_ok=True)
+                cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['depth'])
+                if ind == 0:
+                    fnames['depth'] = [os.path.join(spath, str(ind)+'.png')]
+                else:
+                    fnames['depth'].append(os.path.join(spath, str(ind)+'.png'))
+
+            if out.get('hit') is not None:
+                spath = os.path.join(img_dir, 'hit')
+                os.makedirs(spath, exist_ok=True)
+                cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['hit'])
+                if ind == 0:
+                    fnames['hit'] = [os.path.join(spath, str(ind)+'.png')]
+                else:
+                    fnames['hit'].append(os.path.join(spath, str(ind)+'.png'))
+
+
+            if out.get('normal') is not None:
+                spath = os.path.join(img_dir, 'normal')
+                os.makedirs(spath, exist_ok=True)
+                cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['normal'])
+                if ind == 0:
+                    fnames['normal'] = [os.path.join(spath, str(ind)+'.png')]
+                else:
+                    fnames['normal'].append(os.path.join(spath, str(ind)+'.png'))
+
+                
+            if out.get('rgba') is not None:
+                spath = os.path.join(img_dir, 'rgba')
+                os.makedirs(spath, exist_ok=True)
+                cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['rgba'])
+                if ind == 0:
+                    fnames['rgba'] = [os.path.join(spath, str(ind)+'.png')]
+                else:
+                    fnames['rgba'].append(os.path.join(spath, str(ind)+'.png'))
+
+                
+            else:
+                if out.get('rgb') is not None:
+                    spath = os.path.join(img_dir, 'rgb')
+                    os.makedirs(spath, exist_ok=True)
+                    out['rgb'][...,[2,0]] = out['rgb'][...,[0,2]]
+                    cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['rgb'])
+                    if ind == 0:
+                        fnames['rgb'] = [os.path.join(spath, str(ind)+'.png')]
+                    else:
+                        fnames['rgb'].append(os.path.join(spath, str(ind)+'.png'))
+
+                
+                if out.get('alpha') is not None:
+                    spath = os.path.join(img_dir, 'alpha')
+                    os.makedirs(spath, exist_ok=True)
+                    cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['alpha'])
+                    if ind == 0:
+                        fnames['alpha'] = [os.path.join(spath, str(ind)+'.png')]
+                    else:
+                        fnames['alpha'].append(os.path.join(spath, str(ind)+'.png'))
+        
+
+        # make gifs
+        kwargs = {'duration': .125}
+        for key in list(fnames.keys()):
+            outname = os.path.join(img_dir, key+"_"+str(epoch)+".gif")
+            with imageio.get_writer(outname, mode='I', **kwargs) as writer:
+                for filename in tqdm(fnames[key]):
+                    image = imageio.imread(filename)
+                    writer.append_data(image)

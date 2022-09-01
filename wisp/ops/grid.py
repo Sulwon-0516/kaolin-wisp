@@ -78,7 +78,7 @@ class HashGridInterpolate(torch.autograd.Function):
                                                      resolutions,
                                                      codebook_bitwidth).contiguous()
     
-        ctx.save_for_backward(coords)
+        ctx.save_for_backward(coords.type(torch.float32))
         ctx.resolutions = resolutions
         ctx.num_lods = len(resolutions)
         ctx.codebook_shapes = [_c.shape for _c in codebook]

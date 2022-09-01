@@ -6,8 +6,15 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION & AFFILIATES is strictly prohibited.
 
-from .base_tracer import BaseTracer
-from .packed_rf_tracer import PackedRFTracer
-from .packed_sdf_tracer import PackedSDFTracer
-from .hyper_tracer import HyperTracer
-from .sdf_tracer import SDFTracer
+parent: 'ngp_nerf_masked.yaml'
+
+global:
+    exp_name: 'test-ngp-nerf-masked-interactive'
+
+dataset:
+    bg_color: 'black'
+
+trainer:
+    save_every: -1
+    render_every: -1
+    valid_every: -1
