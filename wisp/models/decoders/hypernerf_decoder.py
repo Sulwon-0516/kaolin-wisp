@@ -133,6 +133,7 @@ class SE3Decoder(nn.Module):
 
 
 
+
 class SliceDecoder(nn.Module):
     """Super basic but super useful MLP class.
     """
@@ -368,3 +369,4 @@ class NGPDecoder(nn.Module):
         # initialize sigma and color out
         torch.nn.init.xavier_uniform_(self.sigma.weight)
         torch.nn.init.xavier_uniform_(self.color_out.weight)
+

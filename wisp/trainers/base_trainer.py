@@ -481,6 +481,7 @@ class BaseTrainer(ABC):
     def iteration(self, iteration: int) -> int:
         self.scene_state.optimization.iteration = iteration
 
+
     def novel_gif_render(self, epoch, N=120, add_z_elev=False):
         '''
         I implemented this code, as the camera focusing on "center" of image
@@ -488,6 +489,7 @@ class BaseTrainer(ABC):
         '''
         # First extract camera extrinsics
         cameras = list(self.dataset.data['cameras'].values())
+
         Ts = torch.cat([-(camera.extrinsics.R.squeeze().T@camera.extrinsics.t.squeeze()).unsqueeze(0) for camera in cameras], dim=0)
 
         means = Ts.mean(dim=0, keepdim=True)
@@ -578,6 +580,7 @@ class BaseTrainer(ABC):
                 if out.get('rgb') is not None:
                     spath = os.path.join(img_dir, 'rgb')
                     os.makedirs(spath, exist_ok=True)
+
                     out['rgb'][...,[2,0]] = out['rgb'][...,[0,2]]
                     cv2.imwrite(os.path.join(spath, str(ind)+'.png'), out['rgb'])
                     if ind == 0:
@@ -603,4 +606,7 @@ class BaseTrainer(ABC):
             with imageio.get_writer(outname, mode='I', **kwargs) as writer:
                 for filename in tqdm(fnames[key]):
                     image = imageio.imread(filename)
+
                     writer.append_data(image)
+
+

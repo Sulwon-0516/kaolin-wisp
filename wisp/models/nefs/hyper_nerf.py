@@ -44,7 +44,6 @@ SE3_EXP_DIM = 6
 # Surface Modify Net
 DEPTH_SURF = 2
 WIDTH_SURF = 64
-
 DIM_HYPER = 2    # dimension of ambient dim
 
 
@@ -104,7 +103,9 @@ class HyperNeuralRadianceField(BaseNeuralField):
         **kwargs
     ):
     # I just copied and little modified the __init__ functions.
+
         nn.Module.__init__(self)
+
 
         self.grid_type = grid_type
         self.interpolation_type = interpolation_type
@@ -126,6 +127,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
         self.pos_multires = pos_multires
         self.view_multires = view_multires
         self.num_layers = num_layers
+
         self.position_input = False             ##################################################### position_input
 
         
@@ -210,8 +212,6 @@ class HyperNeuralRadianceField(BaseNeuralField):
         # We need to implement spherical harmonics encoding here! (08/29)#################################################################################
 
         
-        
-
     def init_decoder(self):
         """Initializes the decoder object. 
         """
@@ -326,7 +326,6 @@ class HyperNeuralRadianceField(BaseNeuralField):
                 hidden_dim=self.hidden_dim, 
                 skip=[])
 
-
     def init_grid(self):
         """Initialize the grid object.
         """
@@ -420,6 +419,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
         """
         self._register_forward_function(self.rgba, ["density", "rgb"])
 
+
     def rgba(self, coords, ray_d, step, pidx=None, lod_idx=None, idx=torch.zeros(1, dtype=torch.int32)):
         """Compute color and density [particles / vol] for the provided coordinates.
 
@@ -435,6 +435,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
                 - RGB tensor of shape [batch, num_samples, 3] 
                 - Density tensor of shape [batch, num_samples, 1]
         """
+
         img_idx = idx.to(self.latent_param.weight.device)
         timer = PerfTimer(activate=False, show_memory=True)
         if lod_idx is None:
@@ -528,6 +529,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
         
         # Decode high-dimensional vectors to RGBA.
         rgba = self.decoder(fdir, color_latent)
+
         timer.check("rf_rgba_decode")
 
         # Colors are values [0, 1] floats
@@ -546,6 +548,7 @@ class HyperNeuralRadianceField(BaseNeuralField):
 I just followed HyperNeRF-torch's implementation here.
 To be accurate, I need to do double-check & re-implmenet here.
 
+
 -> changed to handle batches (08/28)
 
 '''
@@ -563,6 +566,7 @@ def func_se3deforms(se3_inputs, coords):
         torch.matmul(transform, to_homogenous(coords)))
 
     return warped_points.unsqueeze(1)
+
 
 '''
 below codes are from unofficial HyperNeRF implementations
@@ -583,6 +587,7 @@ def rp_to_se3(r, p):
     up =  torch.cat([r, p], dim=-1)
     lower = torch.tensor([[[0, 0, 0, 1]]], dtype=torch.float32).repeat(r.shape[0],1,1).cuda()
     return torch.cat([up, lower], dim=1)
+
 
 
 def skew(w):
