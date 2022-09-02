@@ -23,6 +23,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::module ops = m.def_submodule("ops");
     ops.def("hashgrid_interpolate_cuda", &hashgrid_interpolate_cuda);
     ops.def("hashgrid_interpolate_backward_cuda", &hashgrid_interpolate_backward_cuda);
+    ops.def("hashgrid_interpolate_cuda", &hashgrid_interpolate_cuda_hyper);
+    ops.def("hashgrid_interpolate_backward_cuda", &hashgrid_interpolate_backward_cuda_hyper);
 }
 
 }

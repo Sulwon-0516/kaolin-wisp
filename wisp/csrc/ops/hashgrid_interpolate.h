@@ -31,3 +31,18 @@ std::vector<at::Tensor> hashgrid_interpolate_backward_cuda(
 
 }
 
+at::Tensor hashgrid_interpolate_cuda_hyper(
+    at::Tensor coords,
+    std::vector<at::Tensor> codebook,
+    std::vector<int32_t> resolution,
+    int32_t codebook_bitwidth);
+
+std::vector<at::Tensor> hashgrid_interpolate_backward_cuda_hyper(
+    at::Tensor coords,
+    at::Tensor grad_output,
+    std::vector<int32_t> resolution,
+    std::vector<int32_t> codebook_shapes,
+    int32_t codebook_bitwidth,
+    int32_t feature_dim);
+
+}
