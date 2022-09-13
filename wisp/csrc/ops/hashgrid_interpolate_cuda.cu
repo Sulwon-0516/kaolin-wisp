@@ -37,6 +37,32 @@ hash_index(
     return index;
 }
 
+__device__ int32_t 
+hash_index_hyper(
+    const int3 pos,
+    const int3 ambient,
+    const int32_t resolution,
+    const int32_t codebook_size
+){
+    // It's hash index function for hyper embeddings
+    int32_t index = 0;
+
+    constexpr uint32_t primes[5] = { 1u, 2654435761u, 805459861u, 5654500861u, 9999999967u};    // here I manually seelcted 
+
+    if (resolution < codebook_size && 
+        resolution * resolution < codebook_size && 
+        resolution * resolution * resolution < codebook_size) {
+        index = pos.x + 
+                pos.y * resolution + 
+                pos.z * resolution * resolution;
+    } else {
+        index = (pos.x * primes[0] ^
+                 pos.y * primes[1] ^
+                 pos.z * primes[2]) % codebook_size;
+    }
+    return index;
+}
+
 __device__ float 
 clamp(float x, float a, float b)
 {
@@ -211,6 +237,14 @@ void hashgrid_interpolate_backward_cuda_impl(
     );
 
 // From here, it includes implementations for hyper grids
+// Here I assumed I used 2 ambient dimensions
+// you can easily increase it into 3 dimensions, but if you want higher,
+// we need to modify all.
+
+// TODO
+// check speed difference depending on float/float3/float4
+    
+    
 __global__ void
 hashgrid_interpolate_cuda_kernel_hyper(
     const int64_t num_coords,
@@ -228,29 +262,70 @@ hashgrid_interpolate_cuda_kernel_hyper(
     for (int64_t i=tidx; i<num_coords; i+=stride) { 
         // Until now, indexing process for parallel processing
         
-        float3 x = make_float3(clamp(resolution * (coords[i*3+0] * 0.5 + 0.5), 0, resolution-1-1e-5), 
-                               clamp(resolution * (coords[i*3+1] * 0.5 + 0.5), 0, resolution-1-1e-5), 
-                               clamp(resolution * (coords[i*3+2] * 0.5 + 0.5), 0, resolution-1-1e-5));
+        float3 x = make_float3(clamp(resolution * (coords[i*5+0] * 0.5 + 0.5), 0, resolution-1-1e-5), 
+                               clamp(resolution * (coords[i*5+1] * 0.5 + 0.5), 0, resolution-1-1e-5), 
+                               clamp(resolution * (coords[i*5+2] * 0.5 + 0.5), 0, resolution-1-1e-5));
         int3 pos = make_int3(floor(x.x), floor(x.y), floor(x.z));
         float3 x_ = make_float3(x.x - (float) pos.x, x.y - (float) pos.y, x.z - (float) pos.z);
         float3 _x = make_float3(1.0 - x_.x, 1.0 - x_.y, 1.0 - x_.z);
 
-        float c000 = _x.x * _x.y * _x.z;
-        float c001 = _x.x * _x.y * x_.z;
-        float c010 = _x.x * x_.y * _x.z;
-        float c011 = _x.x * x_.y * x_.z;
-        float c100 = x_.x * _x.y * _x.z;
-        float c101 = x_.x * _x.y * x_.z;
-        float c110 = x_.x * x_.y * _x.z;
-        float c111 = x_.x * x_.y * x_.z;
+        //processing ambient dimensions
+        float3 w = make_float3(clamp(resolution * (coords[i*5+3] * 0.5 + 0.5), 0, resolution-1-1e-5), 
+                               clamp(resolution * (coords[i*5+4] * 0.5 + 0.5), 0, resolution-1-1e-5), 
+                               0.0);
+        int3 w_pos = make_int3(floor(w.x), floor(w.y), 0);
+        float3 w_ = make_float3(w.x - (float) w_pos.x, w.y - (float) w_pos.y, 0.0);
+        float3 _w = make_float3(1.0 - w_.x, 1.0 - w_.y, 0.0);
+
+        float c00000 = _x.x * _x.y * _x.z * _w.x * _w.y;
+        float c00100 = _x.x * _x.y * x_.z * _w.x * _w.y;
+        float c01000 = _x.x * x_.y * _x.z * _w.x * _w.y;
+        float c01100 = _x.x * x_.y * x_.z * _w.x * _w.y;
+        float c10000 = x_.x * _x.y * _x.z * _w.x * _w.y;
+        float c10100 = x_.x * _x.y * x_.z * _w.x * _w.y;
+        float c11000 = x_.x * x_.y * _x.z * _w.x * _w.y;
+        float c11100 = x_.x * x_.y * x_.z * _w.x * _w.y;
+
+        float c00001 = _x.x * _x.y * _x.z * _w.x * w_.y;
+        float c00101 = _x.x * _x.y * x_.z * _w.x * w_.y;
+        float c01001 = _x.x * x_.y * _x.z * _w.x * w_.y;
+        float c01101 = _x.x * x_.y * x_.z * _w.x * w_.y;
+        float c10001 = x_.x * _x.y * _x.z * _w.x * w_.y;
+        float c10101 = x_.x * _x.y * x_.z * _w.x * w_.y;
+        float c11001 = x_.x * x_.y * _x.z * _w.x * w_.y;
+        float c11101 = x_.x * x_.y * x_.z * _w.x * w_.y;
+
+        float c00010 = _x.x * _x.y * _x.z * w_.x * _w.y;
+        float c00110 = _x.x * _x.y * x_.z * w_.x * _w.y;
+        float c01010 = _x.x * x_.y * _x.z * w_.x * _w.y;
+        float c01110 = _x.x * x_.y * x_.z * w_.x * _w.y;
+        float c10010 = x_.x * _x.y * _x.z * w_.x * _w.y;
+        float c10110 = x_.x * _x.y * x_.z * w_.x * _w.y;
+        float c11010 = x_.x * x_.y * _x.z * w_.x * _w.y;
+        float c11110 = x_.x * x_.y * x_.z * w_.x * _w.y;
+
+        float c00011 = _x.x * _x.y * _x.z * w_.x * w_.y;
+        float c00111 = _x.x * _x.y * x_.z * w_.x * w_.y;
+        float c01011 = _x.x * x_.y * _x.z * w_.x * w_.y;
+        float c01111 = _x.x * x_.y * x_.z * w_.x * w_.y;
+        float c10011 = x_.x * _x.y * _x.z * w_.x * w_.y;
+        float c10111 = x_.x * _x.y * x_.z * w_.x * w_.y;
+        float c11011 = x_.x * x_.y * _x.z * w_.x * w_.y;
+        float c11111 = x_.x * x_.y * x_.z * w_.x * w_.y;
+
         
-        int32_t corner_idx[8];
+        
+        int32_t corner_idx[8*4];
 #       pragma unroll
-        for (int j=0; j<8; ++j) {
+        for (int j=0; j<8*4; ++j) {
             int3 corner;
+            int3 ambient;
+
             corner.x = pos.x + ((j & 4) >> 2);
             corner.y = pos.y + ((j & 2) >> 1);
             corner.z = pos.z + ((j & 1) >> 0);
+            ambient.x = w_pos.x + ((j & 8) >> 3);
+            ambient.y = w_pos.y + ((j & 16) >> 4);
             corner_idx[j] = hash_index(corner, resolution, codebook_size);
         }
         
